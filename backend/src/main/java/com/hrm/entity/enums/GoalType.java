@@ -1,0 +1,14 @@
+package com.hrm.entity.enums;
+
+public enum GoalType {
+    PERFORMANCE,
+    DEVELOPMENT,
+    BEHAVIORAL,
+    TECHNICAL,
+    LEADERSHIP,
+    FINANCIAL,
+    CUSTOMER_SATISFACTION,
+    INNOVATION,
+    TEAM_COLLABORATION,
+    PERSONAL_GROWTH
+}
