@@ -301,4 +301,187 @@ public class LeaveRequestService {
             log.error("Error triggering Airflow workflow for leave request: {}", leaveRequest.getId(), e);
         }
     }
+
+    // Entity-based methods for controller support
+    public List<LeaveRequest> getAllLeaveRequests() {
+        return leaveRequestRepository.findAll();
+    }
+
+    public Optional<LeaveRequest> getLeaveRequestById(Long id) {
+        return leaveRequestRepository.findById(id);
+    }
+
+    public List<LeaveRequest> getLeaveRequestsByEmployee(Long employeeId) {
+        return leaveRequestRepository.findByEmployeeId(employeeId);
+    }
+
+    public List<LeaveRequest> getLeaveRequestsByEmployeeAndStatus(Long employeeId, LeaveStatus status) {
+        return leaveRequestRepository.findByEmployeeIdAndStatus(employeeId, status);
+    }
+
+    public List<LeaveRequest> getLeaveRequestsByManager(Long managerId) {
+        return leaveRequestRepository.findByManagerId(managerId);
+    }
+
+    public List<LeaveRequest> getLeaveRequestsByManagerAndStatus(Long managerId, LeaveStatus status) {
+        return leaveRequestRepository.findByManagerIdAndStatus(managerId, status);
+    }
+
+    public Page<LeaveRequest> getLeaveRequestsByDepartment(Long departmentId, Pageable pageable) {
+        return leaveRequestRepository.findByDepartmentId(departmentId, pageable);
+    }
+
+    public LeaveRequest saveLeaveRequest(LeaveRequest leaveRequest) {
+        Employee employee = employeeRepository.findById(leaveRequest.getEmployee().getId())
+            .orElseThrow(() -> new RuntimeException("Employee not found"));
+        
+        // Set applied date if not set
+        if (leaveRequest.getAppliedDate() == null) {
+            leaveRequest.setAppliedDate(LocalDate.now());
+        }
+        
+        // Calculate total days if not set
+        if (leaveRequest.getTotalDays() == null && leaveRequest.getStartDate() != null && leaveRequest.getEndDate() != null) {
+            long daysBetween = java.time.temporal.ChronoUnit.DAYS.between(leaveRequest.getStartDate(), leaveRequest.getEndDate()) + 1;
+            leaveRequest.setTotalDays((double) daysBetween);
+        }
+        
+        // Set status if not set
+        if (leaveRequest.getStatus() == null) {
+            leaveRequest.setStatus(LeaveStatus.PENDING);
+        }
+        
+        LeaveRequest saved = leaveRequestRepository.save(leaveRequest);
+        
+        // Trigger workflow if status is pending
+        if (saved.getStatus() == LeaveStatus.PENDING) {
+            triggerAirflowWorkflow(saved);
+        }
+        
+        return saved;
+    }
+
+    public LeaveRequest updateLeaveRequest(Long id, LeaveRequest leaveRequestDetails) {
+        LeaveRequest existingRequest = leaveRequestRepository.findById(id)
+            .orElseThrow(() -> new RuntimeException("Leave request not found"));
+        
+        // Only allow updates if request is pending
+        if (existingRequest.getStatus() != LeaveStatus.PENDING) {
+            throw new RuntimeException("Cannot update leave request with status: " + existingRequest.getStatus());
+        }
+        
+        existingRequest.setLeaveType(leaveRequestDetails.getLeaveType());
+        existingRequest.setStartDate(leaveRequestDetails.getStartDate());
+        existingRequest.setEndDate(leaveRequestDetails.getEndDate());
+        existingRequest.setReason(leaveRequestDetails.getReason());
+        
+        // Recalculate total days
+        if (existingRequest.getStartDate() != null && existingRequest.getEndDate() != null) {
+            long daysBetween = java.time.temporal.ChronoUnit.DAYS.between(existingRequest.getStartDate(), existingRequest.getEndDate()) + 1;
+            existingRequest.setTotalDays((double) daysBetween);
+        }
+        
+        return leaveRequestRepository.save(existingRequest);
+    }
+
+    public void deleteLeaveRequest(Long id) {
+        LeaveRequest leaveRequest = leaveRequestRepository.findById(id)
+            .orElseThrow(() -> new RuntimeException("Leave request not found"));
+        
+        // Only allow deletion if request is pending or cancelled
+        if (leaveRequest.getStatus() != LeaveStatus.PENDING && leaveRequest.getStatus() != LeaveStatus.CANCELLED) {
+            throw new RuntimeException("Cannot delete leave request with status: " + leaveRequest.getStatus());
+        }
+        
+        leaveRequestRepository.delete(leaveRequest);
+    }
+
+    public LeaveRequest approveLeaveRequest(Long id, String approverComments) {
+        LeaveRequest leaveRequest = leaveRequestRepository.findById(id)
+            .orElseThrow(() -> new RuntimeException("Leave request not found"));
+        
+        if (!leaveRequest.canBeApproved()) {
+            throw new RuntimeException("Leave request cannot be approved in current status: " + leaveRequest.getStatus());
+        }
+        
+        leaveRequest.setStatus(LeaveStatus.APPROVED);
+        leaveRequest.setApproverComments(approverComments);
+        leaveRequest.setApprovedDate(LocalDate.now());
+        
+        LeaveRequest saved = leaveRequestRepository.save(leaveRequest);
+        updateEmployeeLeaveBalance(saved);
+        
+        return saved;
+    }
+
+    public LeaveRequest rejectLeaveRequest(Long id, String rejectionReason) {
+        LeaveRequest leaveRequest = leaveRequestRepository.findById(id)
+            .orElseThrow(() -> new RuntimeException("Leave request not found"));
+        
+        if (leaveRequest.getStatus() != LeaveStatus.PENDING) {
+            throw new RuntimeException("Can only reject pending leave requests");
+        }
+        
+        leaveRequest.setStatus(LeaveStatus.REJECTED);
+        leaveRequest.setApproverComments(rejectionReason);
+        
+        return leaveRequestRepository.save(leaveRequest);
+    }
+
+    public LeaveRequest cancelLeaveRequest(Long id) {
+        LeaveRequest leaveRequest = leaveRequestRepository.findById(id)
+            .orElseThrow(() -> new RuntimeException("Leave request not found"));
+        
+        if (leaveRequest.getStatus() != LeaveStatus.PENDING && leaveRequest.getStatus() != LeaveStatus.APPROVED) {
+            throw new RuntimeException("Can only cancel pending or approved leave requests");
+        }
+        
+        // If request was approved, restore leave balance
+        if (leaveRequest.getStatus() == LeaveStatus.APPROVED) {
+            restoreEmployeeLeaveBalance(leaveRequest);
+        }
+        
+        leaveRequest.setStatus(LeaveStatus.CANCELLED);
+        
+        return leaveRequestRepository.save(leaveRequest);
+    }
+
+    public List<LeaveRequest> getOverlappingLeaves(Long employeeId, LocalDate startDate, LocalDate endDate) {
+        return leaveRequestRepository.findOverlappingLeaves(employeeId, startDate, endDate);
+    }
+
+    public Double getLeaveBalance(Long employeeId, com.hrm.entity.enums.LeaveType leaveType, int year) {
+        Double totalUsed = leaveRequestRepository.getTotalApprovedLeavesByTypeAndYear(employeeId, leaveType, year);
+        
+        Employee employee = employeeRepository.findById(employeeId)
+            .orElseThrow(() -> new RuntimeException("Employee not found"));
+        
+        if (leaveType == com.hrm.entity.enums.LeaveType.ANNUAL) {
+            return employee.getAnnualLeaveBalance() - (totalUsed != null ? totalUsed : 0.0);
+        } else if (leaveType == com.hrm.entity.enums.LeaveType.SICK) {
+            return employee.getSickLeaveBalance() - (totalUsed != null ? totalUsed : 0.0);
+        }
+        
+        return 0.0;
+    }
+
+    public List<LeaveRequest> getLeaveRequestsByStatusAndDate(LeaveStatus status, LocalDate date) {
+        return leaveRequestRepository.findLeaveRequestsByStatusAndDate(status, date);
+    }
+
+    public LeaveRequest submitLeaveRequest(Long id) {
+        LeaveRequest leaveRequest = leaveRequestRepository.findById(id)
+            .orElseThrow(() -> new RuntimeException("Leave request not found"));
+        
+        if (leaveRequest.getStatus() != LeaveStatus.DRAFT) {
+            throw new RuntimeException("Can only submit draft leave requests");
+        }
+        
+        leaveRequest.setStatus(LeaveStatus.PENDING);
+        LeaveRequest saved = leaveRequestRepository.save(leaveRequest);
+        
+        triggerAirflowWorkflow(saved);
+        
+        return saved;
+    }
 }
