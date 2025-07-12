@@ -1,0 +1,171 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: hrm-postgres
+    environment:
+      POSTGRES_DB: hrm_db
+      POSTGRES_USER: hrm_user
+      POSTGRES_PASSWORD: hrm_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    networks:
+      - hrm-network
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0.0
+    container_name: hrm-keycloak
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak_db
+      KC_DB_USERNAME: keycloak_user
+      KC_DB_PASSWORD: keycloak_password
+      KC_HOSTNAME: localhost
+      KC_HTTP_ENABLED: true
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    networks:
+      - hrm-network
+
+  # Airflow Database
+  airflow-db:
+    image: postgres:15-alpine
+    container_name: hrm-airflow-db
+    environment:
+      POSTGRES_DB: airflow_db
+      POSTGRES_USER: airflow_user
+      POSTGRES_PASSWORD: airflow_password
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    networks:
+      - hrm-network
+
+  # Redis for Airflow
+  redis:
+    image: redis:7-alpine
+    container_name: hrm-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - hrm-network
+
+  # Airflow Webserver
+  airflow-webserver:
+    build: ./docker/airflow
+    container_name: hrm-airflow-webserver
+    depends_on:
+      - airflow-db
+      - redis
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow_user:airflow_password@airflow-db:5432/airflow_db
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow_user:airflow_password@airflow-db:5432/airflow_db
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
+      - AIRFLOW__CORE__FERNET_KEY=ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg=
+      - AIRFLOW__WEBSERVER__SECRET_KEY=a25mQ1FHTUh1MnVCSkJFdHFGZ3Z1dNOOg5YWVoTFdz
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__API__AUTH_BACKEND=airflow.api.auth.backend.basic_auth
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    ports:
+      - "8081:8080"
+    command: webserver
+    networks:
+      - hrm-network
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    build: ./docker/airflow
+    container_name: hrm-airflow-scheduler
+    depends_on:
+      - airflow-db
+      - redis
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow_user:airflow_password@airflow-db:5432/airflow_db
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow_user:airflow_password@airflow-db:5432/airflow_db
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
+      - AIRFLOW__CORE__FERNET_KEY=ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg=
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    command: scheduler
+    networks:
+      - hrm-network
+
+  # Airflow Worker
+  airflow-worker:
+    build: ./docker/airflow
+    container_name: hrm-airflow-worker
+    depends_on:
+      - airflow-db
+      - redis
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow_user:airflow_password@airflow-db:5432/airflow_db
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow_user:airflow_password@airflow-db:5432/airflow_db
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
+      - AIRFLOW__CORE__FERNET_KEY=ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg=
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    command: celery worker
+    networks:
+      - hrm-network
+
+  # Monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: hrm-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - hrm-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: hrm-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./docker/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - hrm-network
+
+volumes:
+  postgres_data:
+  airflow_db_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  hrm-network:
+    driver: bridge

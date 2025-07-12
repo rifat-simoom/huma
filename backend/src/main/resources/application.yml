@@ -1,0 +1,207 @@
+server:
+  port: 8082
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: hrm-backend
+  
+  datasource:
+    url: jdbc:postgresql://localhost:5432/hrm_db
+    username: hrm_user
+    password: hrm_password
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        generate_statistics: true
+        default_schema: public
+  
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+    schemas: public
+  
+  redis:
+    host: localhost
+    port: 6379
+    timeout: 2000ms
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 0
+  
+  cache:
+    type: redis
+    redis:
+      time-to-live: 3600000
+      cache-null-values: false
+  
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8080/realms/hrm-realm
+          jwk-set-uri: http://localhost:8080/realms/hrm-realm/protocol/openid-connect/certs
+  
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+# Keycloak Configuration
+keycloak:
+  realm: hrm-realm
+  auth-server-url: http://localhost:8080
+  ssl-required: external
+  resource: hrm-backend
+  credentials:
+    secret: hrm-backend-secret
+  use-resource-role-mappings: true
+  bearer-only: true
+
+# Airflow Configuration
+airflow:
+  base-url: http://localhost:8081
+  username: admin
+  password: admin
+  dag-id: leave_approval_workflow
+
+# Management and Monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,env,beans,configprops
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.5, 0.9, 0.95, 0.99
+    tags:
+      application: ${spring.application.name}
+      environment: ${spring.profiles.active:default}
+
+# Logging Configuration
+logging:
+  level:
+    com.hrm: INFO
+    org.springframework.security: DEBUG
+    org.springframework.web: INFO
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/hrm-backend.log
+    max-size: 10MB
+    max-history: 30
+
+# Custom Application Properties
+hrm:
+  jwt:
+    secret: ${JWT_SECRET:mySecretKey}
+    expiration: 86400000 # 24 hours
+  cors:
+    allowed-origins: http://localhost:3000,http://localhost:5173
+    allowed-methods: GET,POST,PUT,DELETE,OPTIONS,PATCH
+    allowed-headers: "*"
+  file:
+    upload-dir: uploads/
+    max-file-size: 10MB
+  email:
+    from: noreply@hrm.com
+    smtp:
+      host: smtp.gmail.com
+      port: 587
+      username: ${EMAIL_USERNAME:}
+      password: ${EMAIL_PASSWORD:}
+  pagination:
+    default-page-size: 20
+    max-page-size: 100
+
+# API Documentation
+springdoc:
+  api-docs:
+    path: /api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operationsSorter: method
+    tagsSorter: alpha
+  info:
+    title: HRM API
+    description: Human Resource Management System API
+    version: 1.0.0
+    contact:
+      name: HRM Team
+      email: support@hrm.com
+  servers:
+    - url: http://localhost:8082/api
+      description: Development Server
+
+---
+# Development Profile
+spring:
+  profiles: dev
+  jpa:
+    show-sql: true
+    hibernate:
+      ddl-auto: update
+  logging:
+    level:
+      com.hrm: DEBUG
+      
+---
+# Production Profile
+spring:
+  profiles: prod
+  datasource:
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USERNAME}
+    password: ${DATABASE_PASSWORD}
+  redis:
+    host: ${REDIS_HOST}
+    port: ${REDIS_PORT}
+    password: ${REDIS_PASSWORD}
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI}
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI}
+  logging:
+    level:
+      com.hrm: INFO
+      org.springframework.security: WARN
+      org.hibernate.SQL: WARN

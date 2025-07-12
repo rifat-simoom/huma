@@ -1,0 +1,19 @@
+package com.hrm.entity.enums;
+
+public enum RatingCategory {
+    TECHNICAL_SKILLS,
+    COMMUNICATION,
+    TEAMWORK,
+    LEADERSHIP,
+    PROBLEM_SOLVING,
+    QUALITY_OF_WORK,
+    PRODUCTIVITY,
+    INITIATIVE,
+    ADAPTABILITY,
+    CUSTOMER_SERVICE,
+    ATTENDANCE,
+    RELIABILITY,
+    PROFESSIONALISM,
+    INNOVATION,
+    MENTORING
+}
